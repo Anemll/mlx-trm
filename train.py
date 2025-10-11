@@ -20,6 +20,7 @@ parser.add_argument("-e", "--epochs", type=int, default=15, help="number of epoc
 parser.add_argument("--lr", type=float, default=3e-4, help="learning rate")
 parser.add_argument("--seed", type=int, default=0, help="random seed")
 parser.add_argument("--cpu", action="store_true", help="use cpu only")
+parser.add_argument("--val-freq", type=int, default=None, help="validation frequency (every N epochs, default: max(1, epochs//10))")
 
 
 def main(args):
@@ -57,7 +58,9 @@ def main(args):
     )
 
     manager = Trainer(model, optimizer)
-    manager.train(train_data, val=test_data, epochs=args.epochs)
+    # Default validation frequency: no more than 1/10 of epochs
+    val_freq = args.val_freq if args.val_freq is not None else max(1, args.epochs // 10)
+    manager.train(train_data, val=test_data, epochs=args.epochs, val_freq=val_freq)
 
     #! plotting
     import matplotlib.pyplot as plt

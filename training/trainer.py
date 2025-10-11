@@ -56,7 +56,7 @@ class Trainer:
 
         return loss, carry, mx.sum(is_correct), stats
 
-    def train(self, train, val=None, epochs: int = 10):
+    def train(self, train, val=None, epochs: int = 10, val_freq: int = 1):
         state = [self.model.state, self.optimizer.state]
 
         @partial(mx.compile, inputs=state, outputs=state)
@@ -70,7 +70,7 @@ class Trainer:
         carry = None
 
         epoch_bar = tqdm(range(epochs), desc="Training", unit="epoch")
-        for _ in epoch_bar:
+        for epoch_idx in epoch_bar:
             self.model.train()
             train.reset()
             total_loss, total_correct, n = 0, 0, 0
@@ -115,7 +115,7 @@ class Trainer:
                 "avg_steps": f"{avg_steps_accum / n_batches:.2f}",
             }
 
-            if val is not None:
+            if val is not None and (epoch_idx + 1) % val_freq == 0:
                 avg_val_loss, avg_val_acc = self.evaluate(val)
                 self.val_error_trace.append(avg_val_loss)
                 self.val_acc_trace.append(avg_val_acc)
@@ -131,11 +131,14 @@ class Trainer:
         total_loss, total_correct, n = 0, 0, 0
 
         with use_ema(self.model, self.ema_params):
-            for batch in test:
+            val_bar = tqdm(test, desc="Validating", leave=False)
+            for batch in val_bar:
                 batch = {k: mx.array(v) for k, v in batch.items()}
                 carry = self.model.initial_carry(batch)
 
-                while True:
+                # Limit iterations to prevent infinite loops
+                max_iterations = self.model.config.halt_max_steps
+                for _ in range(max_iterations):
                     loss, carry, correct, stats = self.eval_fn(carry, batch)
                     if carry["halted"].all():
                         break
@@ -143,6 +146,11 @@ class Trainer:
                 total_loss += loss.item() * batch["image"].shape[0]
                 total_correct += int(correct)
                 n += batch["image"].shape[0]
+
+                val_bar.set_postfix({
+                    "val_loss": f"{total_loss / n:.3f}",
+                    "val_acc": f"{total_correct / n:.3f}"
+                })
 
         avg_loss = total_loss / n
         avg_acc = total_correct / n
