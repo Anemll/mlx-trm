@@ -11,3 +11,5 @@ my_*/
 # Virtual environments
 .venv
 .claude/rules.md
+evaluators/__init__.py
+ARCHITECTURE_COMPARISON.md

@@ -7,6 +7,24 @@ import mlx.nn as nn
 from models.abstract import Base
 
 
+class RMSNorm(nn.Module):
+    """Parameter-free RMSNorm matching CUDA implementation.
+
+    No learnable scale/bias - only normalizes with fixed gain=1.
+    Matches the CUDA implementation where only eps is configurable.
+    """
+    def __init__(self, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def __call__(self, x: mx.array) -> mx.array:
+        # Compute RMS: sqrt(mean(x²) + eps)
+        ms = mx.mean(x * x, axis=-1, keepdims=True)
+        rms = mx.sqrt(ms + self.eps)
+        # Normalize (no learnable scale)
+        return x / rms
+
+
 @dataclass
 class ModelConfig:
     in_channels: int
@@ -60,10 +78,10 @@ class Attention(nn.Module):
 class Block(nn.Module):
     def __init__(self, dim: int, heads: int):
         super().__init__()
-        self.n1 = nn.RMSNorm(dim)
+        self.n1 = RMSNorm()  # Parameter-free, matching CUDA
         self.attn = Attention(dim, heads)
-        self.n2 = nn.RMSNorm(dim)
-        self.ff = SwiGLU(dim, int(8 / 3.0 * dim))
+        self.n2 = RMSNorm()  # Parameter-free, matching CUDA
+        self.ff = SwiGLU(dim, 3 * dim)  # 3× expansion, matching CUDA (was 8/3× from LLaMA)
 
     def __call__(self, x: mx.array) -> mx.array:
         x = self.n1(x + self.attn(x))

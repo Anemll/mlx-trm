@@ -1,9 +1,11 @@
 import argparse
+import time
 
 import mlx.core as mx
 import mlx.optimizers as optim
 
 from data.vision import cifar10, mnist
+from data.arc import arc_agi_1
 from models import trm
 from training.trainer import Trainer
 
@@ -12,7 +14,7 @@ parser.add_argument(
     "--dataset",
     type=str,
     default=None,
-    choices=["mnist", "cifar10"],
+    choices=["mnist", "cifar10", "arc-sample", "arc-agi-1"],
     help="dataset to use (if resuming, defaults to saved dataset)",
 )
 parser.add_argument("-b", "--batch_size", type=int, default=None, help="batch size (if resuming, defaults to saved batch_size)")
@@ -26,6 +28,7 @@ parser.add_argument("--resume", type=str, default=None, help="checkpoint folder 
 
 
 def main(args):
+    start_time = time.perf_counter()
     if args.cpu:
         mx.set_default_device(mx.cpu)
     mx.random.seed(args.seed)
@@ -76,19 +79,34 @@ def main(args):
         train_data, test_data, meta = mnist(batch_size)
     elif dataset == "cifar10":
         train_data, test_data, meta = cifar10(batch_size)
+    elif dataset == "arc-sample":
+        train_data, test_data, meta = arc_agi_1(batch_size, data_path="data/arc-sample")
+    elif dataset == "arc-agi-1":
+        train_data, test_data, meta = arc_agi_1(batch_size, data_path="data/arc1concept-aug-1000")
     else:
         raise NotImplementedError(f"{dataset=} is not implemented.")
     n_inputs = next(train_data)["image"].shape[1:]
     train_data.reset()
 
     # Create model config
+    # Adjust patch size and output based on dataset
+    if dataset in ["arc-sample", "arc-agi-1"]:
+        # ARC has 30x30 grids, use 5x5 patches (30/5 = 6 patches per side)
+        # ARC has variable number of output tokens, but for classification we use vocab_size
+        patch_size = (5, 5)
+        n_outputs = meta.get("vocab_size", 12)
+    else:
+        # MNIST/CIFAR10 use 4x4 patches and 10 classes
+        patch_size = (4, 4)
+        n_outputs = 10
+
     config = trm.ModelConfig(
         in_channels=n_inputs[-1],
         depth=2,
         dim=64,
         heads=4,
-        patch_size=(4, 4),
-        n_outputs=10,
+        patch_size=patch_size,
+        n_outputs=n_outputs,
     )
 
     # Convert config to dict for saving
@@ -111,7 +129,7 @@ def main(args):
     model.summary()
 
     n_steps = args.epochs * meta["steps_per_epoch"]
-    n_linear = n_steps * 0.10
+    n_linear = max(1, int(n_steps * 0.10))  # Ensure at least 1 step for linear warmup
     linear = optim.linear_schedule(0, learning_rate, steps=n_linear)
     cosine = optim.cosine_decay(learning_rate, n_steps - n_linear, 0)
     lr_schedule = optim.join_schedules([linear, cosine], [n_linear])
@@ -134,6 +152,9 @@ def main(args):
     print(f"Starting training for {args.epochs} additional epoch(s)...")
     manager.train(train_data, val=test_data, epochs=args.epochs, val_freq=val_freq,
                  batch_size=batch_size, learning_rate=learning_rate)
+
+    total_time = time.perf_counter() - start_time
+    print(f"Total training time: {total_time/60:.2f} minutes ({total_time:.1f} seconds)")
 
     #! plotting
     import matplotlib.pyplot as plt
