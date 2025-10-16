@@ -60,12 +60,14 @@ class ARCModelConfig:
     halt_max_steps: int = 16  # maximum adaptive computation steps (paper: 16)
     halt_exploration_prob: float = 0.1  # exploration probability (paper: 0.1)
     halt_follow_q: bool = True  # follow Q-learning halting
+    no_act_continue: bool = True  # match TinyRecursiveModels default (no continue ACT loss)
     # Puzzle identifier embeddings (matching TinyRecursiveModels)
     num_puzzle_identifiers: int = 1000  # Max number of unique puzzle IDs
     puzzle_emb_ndim: int = 16  # Dimension for puzzle embeddings (from GitHub)
     use_sparse_embeddings: bool = True  # Use sparse embeddings for efficiency
     use_fast_rope: bool = True
     use_mlx_ff: bool = True
+    no_act_continue: bool = True  # default from reference YAML; can override via CLI
     # Training semantics: match original TRM more closely
     # Only keep gradients for the LAST latent update within the final deep step
     grad_last_latent_only: bool = True
@@ -388,9 +390,15 @@ class ARCModel(Base):
         carry = self.latent_recursion(carry, x)
 
         # Output logits from all positions except q_token
+        q_logits = self.q_head(carry["y"][:, 0:1])
+
+        bsz = q_logits.shape[0]
         outputs = {
             "logits": self.out_head(carry["y"][:, 1:]),  # (batch, seq_len, vocab)
-            "q_halt_logits": self.q_head(carry["y"][:, 0:1]),  # (batch,)
+            "q_halt_logits": q_logits[:, 1],  # Halt logit (batch,)
+            "q_continue_logits": q_logits[:, 0],  # Continue logit (batch,)
+            # Ensure key always exists for compiled graph stability
+            "target_q_continue": mx.zeros((bsz,), dtype=q_logits.dtype),
         }
 
         carry["y"] = mx.stop_gradient(carry["y"])
@@ -428,9 +436,12 @@ class ARCModel(Base):
         if (self.config.halt_max_steps > 1) and (
             self.training or self.config.halt_follow_q
         ):
-            # outputs["q_halt_logits"] is (batch, 2): [continue_logit, halt_logit]
-            # Halt if halt_logit > continue_logit
-            halted = halted | (outputs["q_halt_logits"][:, 1] > outputs["q_halt_logits"][:, 0])
+            if self.config.no_act_continue:
+                halted = halted | (outputs["q_halt_logits"] > 0)
+            else:
+                halted = halted | (
+                    outputs["q_halt_logits"] > outputs["q_continue_logits"]
+                )
 
         # Exploration during training
         if (
@@ -447,6 +458,29 @@ class ARCModel(Base):
                 low=2, high=self.config.halt_max_steps + 1, shape=new_steps.shape
             )
             halted = halted & (new_steps >= min_halt_steps)
+
+        # Optional bootstrapped Q target (matches CUDA reference)
+        if (
+            self.training
+            and (self.config.halt_max_steps > 1)
+            and (not self.config.no_act_continue)
+        ):
+            lookahead_carry = {
+                "y": mx.stop_gradient(new_inner_carry["y"]),
+                "z": mx.stop_gradient(new_inner_carry["z"]),
+            }
+            lookahead_batch = {
+                k: mx.stop_gradient(v) if isinstance(v, mx.array) else v
+                for k, v in new_current_data.items()
+            }
+            lookahead_carry, lookahead_outputs = self.deep_recursion(
+                lookahead_carry, lookahead_batch
+            )
+            next_q_halt = lookahead_outputs["q_halt_logits"]
+            next_q_continue = lookahead_outputs["q_continue_logits"]
+            max_next = mx.maximum(next_q_halt, next_q_continue)
+            target_q = mx.sigmoid(mx.where(is_last_step, next_q_halt, max_next))
+            outputs["target_q_continue"] = target_q
 
         return (
             dict(

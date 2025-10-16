@@ -27,6 +27,21 @@ Key files:
   done
   ```
 
+### Example training run (paper-like, quick experiment)
+
+```bash
+python train_arc_multi_opt.py --save my_arc_oct_16 \
+  -b 16 --dim 512 --halt-max-steps 1 \
+  --halt-exploration 0.2 \
+  --bf16 -e 10 --val-freq 10 --puzzle-emb-lr 0.01 \
+  --augment --num-aug 30
+```
+
+Notes:
+- Uses multi-optimizer (SGD for sparse puzzle embeddings, AdamW for the model).
+- `--bf16` matches the reference; `--num-aug 30` is a fast proxy for full training.
+- Increase `--halt-max-steps` to 4/8/16 to study ACT cost/benefit.
+
 Forked from [stockeh/mlx-trm](https://github.com/stockeh/mlx-trm) - [Original Tweet](https://x.com/itsstock/status/1977062337556214206)
 
 Simplified reimplementation of [TinyRecursiveModels](https://github.com/SamsungSAILMontreal/TinyRecursiveModels) using [MLX](https://github.com/ml-explore/mlx).

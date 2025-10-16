@@ -1,30 +1,22 @@
-"""ARC-AGI augmented dataset loader with puzzle IDs matching TinyRecursiveModels.
+"""ARC-AGI augmented dataset loader with puzzle IDs matching TinyRecursiveModels."""
 
-This implementation follows the augmentation strategy from:
-https://github.com/SamsungSAILMontreal/TinyRecursiveModels/blob/main/dataset/build_arc_dataset.py
-
-Key features:
-1. Puzzle identifiers for each unique task
-2. Dihedral transformations (rotations/reflections)
-3. Color permutations
-4. Support for translational augmentations
-"""
+from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, Iterator, List, NamedTuple, Optional, Tuple
+
 import numpy as np
-from dataclasses import dataclass
 
 
-@dataclass
-class c:
-    """Configuration for data augmentation."""
-    enable_dihedral: bool = True  # 8 possible rotations/reflections
-    enable_color_permute: bool = True  # Permute non-black colors
-    enable_translation: bool = False  # Translational shifts (training only)
-    max_augmentations_per_puzzle: int = 1000  # Max augmented versions per task
-    puzzle_id_offset: int = 1  # Starting puzzle ID
+class AugmentationConfig(NamedTuple):
+    """Configuration for ARC data augmentations."""
+
+    enable_dihedral: bool = True
+    enable_color_permute: bool = True
+    enable_translation: bool = False
+    max_augmentations_per_puzzle: int = 1000
+    puzzle_id_offset: int = 1
 
 
 def apply_dihedral_transform(grid: np.ndarray, transform_id: int) -> np.ndarray:

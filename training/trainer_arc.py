@@ -123,28 +123,27 @@ class ARCTrainer:
         # Sequence-level correctness (GitHub: seq_is_correct)
         seq_is_correct = (correct_tokens.sum(axis=1) == is_not_padding.sum(axis=1)).astype(mx.float32)
 
-        # 3. Q-HALT LOSS (Cross-Entropy for halting decision)
-        # Target: halt (class 1) when the entire sequence is correct, continue (class 0) otherwise
-        # outputs["q_halt_logits"] is (batch, 2): [continue_logit, halt_logit]
-        q_halt_target = seq_is_correct.astype(mx.int32)  # 0 = continue, 1 = halt
-        q_halt_loss = nn.losses.cross_entropy(
-            outputs["q_halt_logits"],  # (batch, 2)
-            q_halt_target,  # (batch,) with values 0 or 1
-            reduction="mean"
+        # 3. Q-HALT LOSS (Binary Cross-Entropy with scalar logit)
+        # Target: halt (1) when the entire sequence is correct, else continue (0)
+        # outputs["q_halt_logits"] is (batch,) scalar logit for halt
+        q_halt_target = seq_is_correct.astype(mx.float32)
+        q_halt_loss = nn.losses.binary_cross_entropy(
+            outputs["q_halt_logits"],
+            q_halt_target,
+            with_logits=True,
+            reduction="mean",
         )
 
         # 4. Q-CONTINUE LOSS (Optional - present in GitHub but not in paper)
         # GitHub comment: "seems totally unnecessary"
         # Paper removes this for simplification
-        q_continue_loss = mx.array(0.0)
-        if "target_q_continue" in outputs:
-            # This would be the bootstrapped Q-value for continuing
-            q_continue_loss = nn.losses.binary_cross_entropy(
-                outputs.get("q_continue_logits", outputs["q_halt_logits"]),
-                outputs["target_q_continue"],
-                with_logits=True,
-                reduction="mean"
-            )
+        # Continue loss: always present (target_q_continue will be zeros when disabled)
+        q_continue_loss = nn.losses.binary_cross_entropy(
+            outputs["q_continue_logits"],
+            outputs["target_q_continue"],
+            with_logits=True,
+            reduction="mean"
+        )
 
         # ============================================================================
         # LOSS COMBINATION - Key difference between GitHub and Paper
@@ -168,10 +167,8 @@ class ARCTrainer:
         batch_size = target.shape[0]
         total_loss = total_loss / batch_size
 
-        # Compute halt probability from 2-class logits using softmax
-        # q_halt_logits: (batch, 2) -> [continue_prob, halt_prob]
-        q_probs = mx.softmax(outputs["q_halt_logits"], axis=-1)
-        q_halt_prob = q_probs[:, 1]  # Probability of halting (class 1)
+        # Compute halt probability from scalar logit (sigmoid)
+        q_halt_prob = mx.sigmoid(outputs["q_halt_logits"])
 
         stats = {
             "lm_loss": lm_loss,  # Language model loss (cross-entropy)
